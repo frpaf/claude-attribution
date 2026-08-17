@@ -1,0 +1,45 @@
+#!/bin/sh
+# Global prepare-commit-msg hook (installed to ~/.git-hooks by
+# tools/attribution/install.sh, activated via `git config --global core.hooksPath`).
+#
+# Appends the Claude co-author trailer to commits made from Claude Code
+# sessions (CLAUDECODE=1 — set by Claude Code in every shell it spawns,
+# including subagents'). Attribution via prompt instructions alone is
+# best-effort and leaks on subagent commits and local merges; this hook
+# closes that gap mechanically. Human commits (no CLAUDECODE) pass through
+# untouched.
+#
+# Must never abort a commit: every unexpected condition exits 0.
+
+MSG_FILE="$1"
+
+# Chain to the repo-local hook first, so repos with plain .git/hooks keep
+# working under the global core.hooksPath. Resolve .git/hooks explicitly via
+# --git-common-dir (not --git-path hooks, which would honor core.hooksPath, and
+# not --git-dir which returns the worktree-private dir in linked worktrees).
+# --git-common-dir equals --git-dir in normal repos and returns the shared .git
+# in worktrees. (Repos that set a local core.hooksPath, e.g. husky, bypass this
+# file entirely — git only ever runs one hooks dir, and local config wins.)
+LOCAL_HOOK="$(git rev-parse --git-common-dir 2>/dev/null)/hooks/prepare-commit-msg"
+if [ -n "$MSG_FILE" ] && [ -x "$LOCAL_HOOK" ] && [ "$LOCAL_HOOK" != "$0" ]; then
+  "$LOCAL_HOOK" "$@" || exit $?
+fi
+
+[ "${CLAUDECODE:-}" = "1" ] || exit 0
+[ -n "$MSG_FILE" ] && [ -w "$MSG_FILE" ] || exit 0
+
+TRAILER='Co-Authored-By: Claude <noreply@anthropic.com>'
+
+# If the file's last byte isn't a newline, the "\n$TRAILER\n" below would
+# glue onto the last line instead of starting a new (blank) line, and git
+# would not parse it as a trailer. Normalize first.
+if [ -s "$MSG_FILE" ] && [ "$(tail -c 1 "$MSG_FILE" 2>/dev/null)" != "" ]; then
+  printf '\n' >> "$MSG_FILE" 2>/dev/null || exit 0
+fi
+
+if ! grep -qF "$TRAILER" "$MSG_FILE" 2>/dev/null; then
+  # Blank line before the trailer so git parses it as a trailer, not body text.
+  printf '\n%s\n' "$TRAILER" >> "$MSG_FILE" 2>/dev/null || exit 0
+fi
+
+exit 0
